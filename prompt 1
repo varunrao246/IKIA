@@ -1,0 +1,31 @@
+# STEP 1: WORKSPACE AUDIT, CLEANUP & ROUND 1 + ROUND 2 UNIFICATION FOR ROUND 3
+
+I have placed our Round 1 codebase (Manufacturing Manual RAG Assistant), Round 2 codebase (Visual Quality Inspection Platform), and the new Round 3 official files (`Round3_Student_Challenge_Brief.pdf`/`.docx`, `START_HERE.txt`, `product_sop_mapping.csv`, and the `SOPs/` folder containing `Q_PLATE_01_Containment_Rev1_0.pdf`, `Q_PLATE_02_Review_Rev1_0.pdf`, and `Q_GASKET_01_Review_Rev1_0.pdf`) into this workspace.
+
+Do NOT build the full Round 3 features yet. First, perform a clean workspace consolidation and give me a clear status report so we have a single, conflict-free Django application ready for Round 3:
+
+## 1. Inspect Everything in the Workspace
+- Scan all directories and list where Round 1 (`iki_core` / `manuals_app`), Round 2 (`config` / `inspections`), and Round 3 (`SOPs/`, `product_sop_mapping.csv`) are currently located.
+- Read `Round3_Student_Challenge_Brief.docx` (or `.pdf`), `START_HERE.txt`, and `product_sop_mapping.csv`.
+
+## 2. Unify on the Round 2 Django Server (Without Breaking Round 1 or Round 2)
+The Round 3 brief states:
+- "Reuse login, role permissions, saved inspections, the model, RAG, database connections, and UI from earlier rounds. Add one incident screen, a few endpoints, and a small database extension."
+- "Do not overwrite Round 2 predictions or reviews. Keep the two rounds' frozen submissions separate."
+- "Never use a different product's SOP or the Round 1 equipment manuals as quality guidance."
+
+Execute this clean consolidation:
+1. **Use the Round 2 Django project as our active base application** (since it already has `Product` `P-PLATE01`, `Inspection`, `InspectionBatch`, `InspectionReview`, `Model/inference.py`, users `admin`, `engineer1`, `engineer2`, `supervisor`, and the Dark Neo-Brutalist UI).
+2. **Archive/Isolate Duplicate Entrypoints:** If Round 1's `iki_core` or `manuals_app` is sitting in a separate subfolder or clashing at the root, keep Round 1's frozen code safely backed up in a `_round1_archive/` folder so there are zero duplicate `manage.py` or `settings.py` conflicts, AND Round 1's equipment manuals (`HP-OPS-01`, `HP-MNT-01`, `AC-OM-01`) can NEVER contaminate Round 3's SOP vector index.
+3. **Port Only the Reusable RAG Engine from Round 1:** Extract our PyMuPDF (`fitz`) page extractor, hybrid vector retrieval logic, and cascading LLM (`GEMINI_API_KEY` / `GROQ_API_KEY` + deterministic fallback) utility from Round 1 into a clean module inside our active Round 2 app (e.g., `inspections/sop_rag_engine.py`) ready to index `SOPs/` and `product_sop_mapping.csv`.
+4. **Organize Round 3 Assets at the Active Project Root:**
+   - Ensure `product_sop_mapping.csv` and `SOPs/` (`Q_PLATE_01_Containment_Rev1_0.pdf`, `Q_PLATE_02_Review_Rev1_0.pdf`, `Q_GASKET_01_Review_Rev1_0.pdf`) are in the active project root AND copied to `media/sops/` so they can be served in the browser with `#page=1` and `#page=2` anchors.
+   - Ensure `PyMuPDF` (`fitz`) is installed in the active virtualenv.
+
+## 3. Verify Base Health & Report Back
+1. Run `python manage.py check` and verify the Round 2 database (`P-PLATE01`, users, and saved inspections) is intact.
+2. Print a concise summary showing:
+   - The final clean folder structure.
+   - What was archived/removed to prevent conflicts.
+   - What was kept from Round 1 (RAG engine) and Round 2 (Auth, RBAC, Saved Inspections, UI).
+   - Confirmation that we are ready for **Prompt 2 (Building the Round 3 Quality Incident Model, Endpoints, and UI)**.
