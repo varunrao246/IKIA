@@ -1,0 +1,84 @@
+# STEP 2: BUILD ROUND 3 QUALITY INCIDENT MODEL, ENDPOINTS & NEO-BRUTALIST UI
+
+The workspace is fully unified, PostgreSQL and PyMuPDF RAG are operational, and all Round 2 tests pass. Now build the complete Round 3 Quality Incident and Action Assistant features according to the challenge brief.
+
+---
+
+## 1. Database Model Extension (`inspections/models.py`)
+Add the `QualityIncident` model to `inspections/models.py` (and generate/run migrations `python manage.py makemigrations` and `python manage.py migrate`):
+- `incident_id`: CharField (`unique=True`, e.g., `INC-0001`, auto-generated sequentially).
+- `inspection`: **`OneToOneField(Inspection, on_delete=models.CASCADE, related_name='quality_incident', unique=True)`** -> Enforces strictly ONE incident per inspection at the database level.
+- `product`: `ForeignKey(Product, on_delete=models.PROTECT)`
+- `product_id_code`: CharField (e.g., `P-PLATE01`)
+- `original_predicted_class`: CharField (snapshot of `inspection.predicted_class`, must be `Defective`)
+- `original_confidence`: FloatField (snapshot of `inspection.confidence`)
+- `original_defect_probability`: FloatField (snapshot of `inspection.defect_probability`)
+- `model_version`: CharField (snapshot of `inspection.model_version`, e.g., `BIT-PLATE-CV-1.0`)
+- `summary`: TextField (factual incident summary generated from the saved inspection and product mapping)
+- `suggested_actions`: JSONField (default=list) -> List of grounded action objects with citations (`action_title`, `action_detail`, `document_id`, `filename`, `revision`, `page_number`, `passage`, `pdf_url`).
+- `citations`: JSONField (default=list) -> Deduped list of all cited SOP page objects.
+- `evidence_status`: CharField with choices `Sufficient`, `Insuffcient`
+- `evidence_reason`: TextField (blank=True, stores diagnostic reason if SOPs/mappings are missing or retrieval fails).
+- `review_status`: CharField with choices `Pending`, `Approved for follow-up`, `Needs more information` (default=`Pending`)
+- `review_comment`: TextField (blank=True)
+- `reviewed_by`: `ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='reviewed_incidents')`
+- `reviewed_at`: DateTimeField (null=True, blank=True)
+- `created_by`: `ForeignKey(User, on_delete=models.CASCADE, related_name='created_incidents')`
+- `created_at`: DateTimeField (`auto_now_add=True`)
+- `updated_at`: DateTimeField (`auto_now=True`)
+
+---
+
+## 2. Views, Serializers & Endpoints (`inspections/views.py` & `urls.py`)
+Implement the following server-enforced endpoints and web views:
+1. **`POST /api/inspections/<int:inspection_id>/incident/` (and HTML form action):**
+   - **Role Check:** Only `ENGINEER` can create an incident, and **only** for their own inspection (`inspection.submitted_by == request.user`). Return `HTTP 403 Forbidden` if another Engineer, Supervisor, or Admin attempts creation.
+   - **Eligibility Check:** Verify `inspection.status == 'COMPLETED'` and `inspection.predicted_class == 'Defective'` (using the immutable original model prediction). If `Normal`, `QUEUED`, `PROCESSING`, or `FAILED`, return `HTTP 400 Bad Request` with a clear message and do NOT create an incident.
+   - **Idempotency (`transaction.atomic()` + `select_for_update()`):** If `inspection.quality_incident` already exists, return the existing incident (`HTTP 200 OK` with `"created": false`) without overwriting its ID, summary, or review status.
+   - **RAG Integration:** Invoke `SOPRAGEngine` to check mapping and SOP availability (`Q-PLATE-01` and `Q-PLATE-02`). If missing/unreadable, set `evidence_status = "Insufficient"` and generate a manual review record with zero unsupported actions. If sufficient, generate the factual summary and grounded actions citing both plate SOPs.
+2. **`GET /incidents/` & `GET /incidents/<int:incident_id>/` (and JSON DRF endpoints):**
+   - **Horizontal Data Isolation:** Engineers view ONLY incidents for their own inspections (`inspection__submitted_by=request.user`, returning `403` if querying another Engineer's incident). Supervisors view all incidents.
+3. **`POST /api/incidents/<int:incident_id>/review/`:**
+   - **Strict Role Check (`IsSupervisorOnly`):** ONLY users with role `SUPERVISOR` can submit incident reviews. Return **`HTTP 403 Forbidden`** if `ENGINEER` or `ADMIN` attempts to review.
+   - **Validation:**
+     - `decision` must be `'Approved for follow-up'` or `'Needs more information'`.
+     - `comment` is **required** (non-empty). Return `HTTP 400 Bad Request` if blank.
+     - **Insufficient Evidence Lock:** If `incident.evidence_status == 'Insufficient'` and `decision == 'Approved for follow-up'`, reject with `HTTP 400 Bad Request` (`"Incidents with Insufficient evidence cannot be Approved for follow-up. Only 'Needs more information' is permitted."`).
+     - Save review status, comment, reviewer, and timestamp without mutating Round 2 inspection records.
+4. **Demo Check 4 Helper Endpoint (`POST /api/demo/toggle-sop-availability/`):**
+   - A utility endpoint that temporarily renames `SOPs/Q_PLATE_02_Review_Rev1_0.pdf` (or mapping) to simulate missing evidence / manual review path, and restores it back on toggle.
+
+---
+
+## 3. Dark Neo-Brutalist UI & Incident Templates
+1. **Top Navbar (`base.html`):** Add `QUALITY INCIDENTS [R3]` link.
+2. **Inspection Detail Screen (`inspection_detail.html`):**
+   - On `COMPLETED` + original `Defective` inspections, display a high-contrast brutalist button: `[GENERATE / VIEW QUALITY INCIDENT]` (or badge `INCIDENT LINKED: INC-XXXX`).
+   - On `Normal` inspections, provide a `[TEST R3 ELIGIBILITY: REQUEST INCIDENT ON NORMAL]` button demonstrating live rejection.
+3. **Incident Detail Screen (`templates/inspections/incident_detail.html`):**
+   - **Panel 1 (`[LINKED ROUND 2 INSPECTION & IMMUTABLE CV OUTPUT]`):** Original image preview, Inspection ID, Product `P-PLATE01`, Original Prediction (`DEFECTIVE`), Confidence, Model Version, and Round 2 human review badge.
+   - **Panel 2 (`[GROUNDED QUALITY INCIDENT SUMMARY & EVIDENCE STATUS]`):** Displays `INCIDENT ID`, `EVIDENCE STATUS: SUFFICIENT` (Emerald) or `INSUFFICIENT // MANUAL REVIEW REQUIRED` (Crimson hazard banner with `evidence_reason`), Product Scope Isolation badge (`MAPPED SOPs: Q-PLATE-01 v1.0 + Q-PLATE-02 v1.0 | EXCLUDED: Q-GASKET-01`), and factual summary.
+   - **Panel 3 (`[VERIFIABLE SOP ACTIONS & #PAGE=N CITATION CARDS]`):** Renders suggested actions with `[Q-PLATE-01 | REV 1.0 | PAGE N]` and `[Q-PLATE-02 | REV 1.0 | PAGE N]` badges, verbatim passages, and `[OPEN CITED SOP PDF (PAGE N)]` buttons opening the in-app Split-Screen PDF Drawer at `#page=N`.
+   - **Panel 4 (`[ROUND 3 SUPERVISOR INCIDENT REVIEW]`):**
+     - Shows current review status (`PENDING`, `APPROVED FOR FOLLOW-UP`, `NEEDS MORE INFORMATION`), reviewer, timestamp, comment, and the notice: *"Approval authorizes follow-up only, not product release or shipment."*
+     - **For Supervisor:** Review form (`Approved for follow-up` [blocked if insufficient] vs `Needs more information` + mandatory comment).
+     - **For Engineer / Admin:** `[DEMO CHECK 5: ATTEMPT INCIDENT REVIEW AS ENGINEER/ADMIN (403 TEST)]` button firing a real `POST` and displaying the live `HTTP 403 FORBIDDEN` banner.
+4. **Interactive 5-Step Round 3 Judge Demonstration Bar:** Include buttons for all 5 demo checks directly in the UI.
+
+---
+
+## 4. Seeder & Automated Tests
+1. Update `python manage.py seed_data` to ensure `media/sops/` has all 3 SOP PDFs and pre-seeds a sample `Defective` inspection with a linked incident.
+2. Create `inspections/tests/test_round3_incidents.py` testing all 10 Round 3 acceptance requirements:
+   - `test_create_incident_from_defective_inspection_cites_both_plate_sops`
+   - `test_duplicate_incident_request_returns_same_incident_and_preserves_review`
+   - `test_normal_queued_and_failed_inspections_rejected_from_creating_incident`
+   - `test_round2_human_override_does_not_alter_original_defective_eligibility`
+   - `test_product_scope_isolation_excludes_gasket_sop`
+   - `test_missing_required_sop_creates_insufficient_evidence_incident_with_no_actions`
+   - `test_insufficient_evidence_incident_cannot_be_approved_for_followup`
+   - `test_engineer_and_admin_denied_incident_review_with_403`
+   - `test_engineer_horizontal_isolation_on_incidents`
+   - `test_supervisor_review_requires_comment_and_preserves_round2_records`
+
+Run `python manage.py makemigrations`, `python manage.py migrate`, `python manage.py seed_data`, and `pytest -v` to verify 100% test pass rates.
