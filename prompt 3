@@ -1,0 +1,57 @@
+# STEP 3: FINAL JUDGE-PROOFING, 5-CHECK LIVE DEMO LOCKDOWN & LOCALHOST LAUNCH
+
+Round 3 models, endpoints, UI, and 44 automated tests are passing. Now execute this final production polish and live server launch so we can walk straight into the Judge Evaluation with zero friction.
+
+---
+
+## 1. Fix In-App PDF Drawer Embedding & Media Serving (`settings.py` & `urls.py`)
+1. In `config/settings.py`, ensure `X_FRAME_OPTIONS = 'SAMEORIGIN'` is explicitly set so the browser never blocks `/media/sops/Q_PLATE_01_Containment_Rev1_0.pdf#page=1` or `/media/sops/Q_PLATE_02_Review_Rev1_0.pdf#page=2` inside the Split-Screen PDF `<iframe>` drawer.
+2. Verify that `SOPs/Q_PLATE_01_Containment_Rev1_0.pdf`, `SOPs/Q_PLATE_02_Review_Rev1_0.pdf`, and `SOPs/Q_GASKET_01_Review_Rev1_0.pdf` are all present in BOTH `SOPs/` and `media/sops/` (and that no `.bak` file is left behind from test runs).
+3. Verify via a quick curl/client check that `GET /media/sops/Q_PLATE_01_Containment_Rev1_0.pdf` and `GET /media/sops/Q_PLATE_02_Review_Rev1_0.pdf` return `HTTP 200 OK` with `Content-Type: application/pdf`.
+
+---
+
+## 2. Guarantee Fresh Demo Inspections & 1-Click Judge Reset (`seed_data.py` & Views)
+During live judging (and team practice runs before judging), we must never run out of fresh unlinked `Defective` inspections for Check 1 and Check 4.
+1. Update `python manage.py seed_data` and add a helper endpoint `POST /api/demo/reset-round3/` (plus a `[RESET DEMO STATE FOR JUDGES]` button in the Incident Demo Bar) that:
+   - Restores `SOPs/Q_PLATE_02_Review_Rev1_0.pdf` (and `media/sops/Q_PLATE_02_Review_Rev1_0.pdf`) if it was toggled off during Check 4.
+   - Ensures `engineer1` always has these exact, clearly identifiable inspections ready:
+     a) **Pre-Seeded Reviewed Incident (`INC-0001`):** Linked to a completed `Defective` inspection for `P-PLATE01`, with `evidence_status='Sufficient'`, 4 grounded actions citing both `Q-PLATE-01` (Pages 1 & 2) and `Q-PLATE-02` (Pages 1 & 2), and a saved Supervisor review.
+     b) **Fresh Defective Inspection #1 (For Live Demo Check 1 & Check 2):** A `COMPLETED` + original `Defective` inspection owned by `engineer1` with **NO incident created yet**, ready to click `[GENERATE / VIEW QUALITY INCIDENT]` live for Check 1 and repeat for Check 2.
+     c) **Fresh Defective Inspection #2 (For Live Demo Check 4 — Missing SOP Path):** A second `COMPLETED` + original `Defective` inspection owned by `engineer1` with **NO incident created yet**, ready to test creating an `Insufficient` / `Manual review required` incident after toggling `Q-PLATE-02` off.
+     d) **Fresh Defective Inspection #3 with Round 2 Supervisor Override to Normal:** A `COMPLETED` inspection whose immutable original model prediction is `Defective` (`predicted_class='Defective'`), but where `supervisor` recorded a Round 2 `InspectionReview` overriding it to `Normal` (`is_override=True`), proving that Round 3 eligibility still uses the immutable original `Defective` prediction while displaying the Round 2 human correction separately.
+     e) **Completed Normal Inspection (For Live Demo Check 3):** A `COMPLETED` + original `Normal` inspection owned by `engineer1`, ready to demonstrate live rejection (`HTTP 400 Bad Request` — zero incident created).
+
+---
+
+## 3. Instant 1-Click Role Switcher with Page Persistence (`base.html` & `views.py`)
+During **Check 5** (*"Attempt review as Engineer and show denial. Review as Supervisor, add a comment, and reload the saved result"*), switching from `engineer1` to `supervisor` should keep the presenter on the exact same Incident Detail page (`/incidents/<incident_id>/`) instead of redirecting away.
+1. Add a clean `POST /api/demo/quick-switch-role/` (or `GET /demo-login/<role>/?next={{ request.path }}`) route and a compact **1-Click Role Switcher Bar** in the top navbar (`base.html`):
+   - `[ENG 1]` (`engineer1`)
+   - `[SUPERVISOR]` (`supervisor`)
+   - `[ENG 2]` (`engineer2`)
+   - `[ADMIN]` (`admin`)
+2. When clicked on `/incidents/<incident_id>/`, it logs in the selected user via real Django session auth and redirects straight back to `request.path` (or `/incidents/` if switching to `engineer2`).
+
+---
+
+## 4. Interactive 5-Step Judge Demonstration Bar (`incident_list.html` & `incident_detail.html`)
+Verify that the **5-Step Round 3 Judge Demonstration Bar** at the top of `/incidents/` and `/incidents/<id>/` makes executing the 5 official checklist items effortless:
+- **[CHECK 1: CREATE INCIDENT + DUAL SOPs]** -> Jumps straight to `engineer1`'s fresh unlinked `Defective` inspection (or creates the incident in 1 click) and highlights the `Q-PLATE-01` and `Q-PLATE-02` `#page=N` PDF drawer buttons.
+- **[CHECK 2: REPEAT DUPLICATE REQUEST (IDEMPOTENCY)]** -> Fires a repeated `POST /api/inspections/<uuid>/incident/` for the same inspection and displays a live banner showing: `HTTP 200 OK | created: false | Incident ID Unchanged | Total Incident Count Unchanged | Existing Review Preserved`.
+- **[CHECK 3: REJECT NORMAL INSPECTION]** -> Fires `POST /api/inspections/<normal_uuid>/incident/` on `engineer1`'s `Normal` inspection and displays the live `HTTP 400 BAD REQUEST` rejection banner proving 0 incidents are created for Normal items.
+- **[CHECK 4: MISSING SOP -> MANUAL REVIEW PATH]** -> Step A button toggles `Q_PLATE_02_Review_Rev1_0.pdf` unavailable; Step B button creates an incident on Fresh Defective Inspection #2 (producing `EVIDENCE STATUS: INSUFFICIENT // MANUAL REVIEW REQUIRED` with `0` suggested actions); Step C button restores `Q_PLATE_02_Review_Rev1_0.pdf` back to `ONLINE`.
+- **[CHECK 5: ENGINEER 403 DENIAL -> SUPERVISOR REVIEW]** -> As `engineer1`, fires `POST /api/incidents/<id>/review/` and displays the live `HTTP 403 FORBIDDEN` banner; then 1-click switches to `supervisor` right on that page to submit `Approved for follow-up` (or `Needs more information` if Insufficient) with a required comment and reloads the persisted result.
+- **[RESET DEMO STATE]** -> Resets practice runs back to the clean baseline in 1 click.
+
+---
+
+## 5. Start All Services on Localhost & Print Direct Links
+1. Run `python manage.py makemigrations`, `python manage.py migrate`, and `python manage.py seed_data`.
+2. Run the full test suite (`pytest -v`) to confirm 100% pass rate with the new reset/role-switch helpers.
+3. Ensure PostgreSQL, Redis, Celery worker (`--pool=solo`), and the Django server (`python manage.py runserver 0.0.0.0:8000`) are running actively in the background.
+4. Perform a live HTTP check against `http://127.0.0.1:8000/login/` and `http://127.0.0.1:8000/incidents/`.
+5. Print a final summary with:
+   - The clickable **Localhost URLs** (`http://127.0.0.1:8000/...`) for Login, Dashboard, Quality Incidents List, Pre-Seeded Incident `INC-0001`, and the PDF links.
+   - Exact login credentials for `engineer1`, `supervisor`, `engineer2`, and `admin`.
+   - Confirmation that all 5 Judge Demo Checks are live and ready.
